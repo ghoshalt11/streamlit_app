@@ -1,20 +1,11 @@
 # Import python packages
 import streamlit as st
-# import 
-# import mimetypes
+
 import pandas as pd
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 import speech_recognition as sr
-import tempfile
-# from streamlit_webrtc import webrtc_streamer
-# from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
-import whisper
-import av
-import queue
-import numpy as np
-import wave
-import re
+
 # from streamlit_audiorec import audio_recorder
 
 
@@ -45,7 +36,7 @@ session = get_or_create_session()
 
 
 # python UDF function for retrieving recent user-bot conversations to have past context linked to current user prompt
-def get_recent_context(chat_history, n=2):
+def get_recent_context(chat_history, n):
     return chat_history[-n:] if len(chat_history) >= n else chat_history
 
 st.markdown("""
@@ -125,7 +116,7 @@ st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
 db_schema=session.sql(f"""SELECT LISTAGG($1, '\n') FROM @CRM_SAMPLE_DB.PUBLIC.CRM_SCHEMA_STAGE/crm_schema_ss.sql
       (FILE_FORMAT => 'crm_sql_format')""")
 with st.sidebar:    
-    if st.button("🗑 clear chat", help="Clear the chat history"):
+    if st.button("🗑 clear chat", help="Clear chat session history"):
         st.session_state.chat_history = []
     if st.button("💾 save chat"):
         chat_lines = []
@@ -234,7 +225,7 @@ if uploaded_file:
             df = excel_file.parse(selected_sheet)
             st.info("✅ Excel sheet loaded.")
             st.dataframe(df.head(10))
-            with st.status("🧠 SalesSense Analyzing ...", expanded=True) as status:
+            with st.status("🧠 AI Analyzing ...", expanded=True) as status:
                         csv_text = df.head(100).to_csv(index=False)
                         llm_prompt=prompt = f"""
 You are a sales analyst AI and chatting with a user currntly you are speaking. 
@@ -266,50 +257,129 @@ if st.button("🎙️Speak"):
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     try:
+        recent_context = get_recent_context(st.session_state.chat_history, n=20)
+        context_str = "\n".join([f"{entry['role']}: {entry['message']}" for entry in recent_context])
         with sr.Microphone() as source:
-            st.info("🎤 Listening...speak now.")
+            st.info("🎤 Listening...speak now (~21 secs).")
             recognizer.adjust_for_ambient_noise(source)
-            audio = recognizer.listen(source)
+            audio = recognizer.listen(source, timeout=6, phrase_time_limit=26)
+            # audio = recognizer.listen(source)
+            mic_input = recognizer.recognize_google(audio)
 
-        mic_input = recognizer.recognize_google(audio)
         st.info(f"🗣️ You said: {mic_input}")
         # mic_input='speaking mic: '+mic_input
         st.session_state.chat_history.append({"role": "user", "message": mic_input})
         with st.status("🧠 AI analyzing ...", expanded=True) as status:
              
+            #  safe_prompt = mic_input.replace("'", "''")
+            #  safe_prompt = mic_input llama3-70b llama3-8b
+             llm1_output_sql = session.sql(f"""
+SELECT SNOWFLAKE.CORTEX.COMPLETE(
+  'llama3-8b',
+  $$
+Act as a smart sales assistant cum strategist to user's. Dont be in passve tone.
+User will be input something, you need to samrtly figure out what user wish to do.
+If user want to create lead, before creating lead, take details of lead to identofy if its qualified lead or not.
+ If qualified then give suggestions to nurture them further.
+Suggest what business points, challengs clients/leads being user discussin we should look in for according to Services we are offering.
+
+whatever you responds, wrap it smartly and short, so user no need to read long paragraphs what you reply back
+Dont forget to check your memory  :"{context_str}" , which is recent last chat history so you understand context of user's input if its new request or continuation from past chat history.
+Here is our (Nihilent's) Companies's Offerings /service :
+
+
+                        1. Data engnieering, Analysis & Business analysis as consulting.
+                        2. AI driven customized cloud native app solutions. 
+                        3. Small size tech startup support. 
+                        4. Cloud Infra Support
+                       
+                                          
+Now User says: {mic_input}
+$$
+)
+""").collect()[0][0]
+             cortex_response=llm1_output_sql
+#              llm2_result = session.sql(f"""
+# SELECT SNOWFLAKE.CORTEX.COMPLETE(
+#   'snowflake-arctic',
+#   $$
+#   You are a strict SQL validator.
+#   You are given a user prompt and a generated SQL insert statement.
+#   Check if all mandatory fields are extracted: FIRST_NAME, LAST_NAME, COMPANY.
+#   If all three are non-empty in the SQL, reply only: Yes
+#   If any of them are missing (empty string or blank), reply only: Ask mandatory fields
+
+#   User input: {mic_input}
+#   Generated SQL: {llm1_output_sql}
+#   $$
+# )
+# """).collect()[0][0].strip()
+#              if "Yes" in llm2_result:
+#                   session.sql(llm1_output_sql).collect()
+#                   cortex_response = f"✅ Lead created successfully!"
+#              else:
+#                   cortex_response=f"{llm1_output_sql}"
+#     #               cortex_response = (
+#     #     "⚠️ I need  few more details to create this lead.\n\n"
+#     #     "**Please provide:** FIRST_NAME, LAST_NAME, and COMPANY."
+#     # )
+             
                           
-             mic_prompt = f"""
-             You Act as an AI assistant for sales automation and currently act as you directly 
-             speaking to user.
-             Respond in direct mode (tone of conversation), not as passive mode.
-             The user said via microphone: "{mic_input}"
-             Interpret this input and respond appropriately with considering below available given database schema 
-             : {db_schema}
+#              mic_prompt = f"""
+#              You Act as an AI assistant for sales CRM workflow tasks automation and 
+#              currently act as you directly speaking to user. No need to give any prompt context you are being given here.
 
- 1. understand from user''s prompt  user want to create  lead, then make sure atleast - user has provided below fields (refering from given DB schema-
-    FIRST_NAME, LAST_NAME, COMPANY, EMAIL, PHONE,INDUSTRY else ask for info politely in short
-  2. when need to udpate check if proper fields are given according to given schema.
-  by default insert/update this column - owner_id as value 'ghoshalt11'
-"""
-             llm_response=session.sql(f"""
-            SELECT snowflake.cortex.complete('llama3-8b', $$ {mic_prompt} $$)
+#              Your job is first understand  User's need and also check with recent past chats with same user if it is anyhow related then act accordingly
+#              here is context of past recent chats with you : "{context_str}"
 
-            """).collect()[0][0]
-             status.update(label="", state="complete", expanded=False)
-        with st.chat_message("ai",avatar="❄️"):
-                            st.write(f"{llm_response}")
-                            st.session_state.chat_history.append({"role": "ai", "message": llm_response})
+#              Undertstand , Analyse properly then decide which category user's need falling into :
+#              1. lead status update / creation ?
+#              2. Log a call or schedule setup with lead/clients, or schedule a meeting or add a reminder task
+#              If Any lead/deals data asked to create update delete request made then consider given below DB schema, 
+#              according to that you will generate SQL statament and signal SQL to be generated.
+#              Respond in direct mode (tone of conversation), not as passive mode.
+
+           
+#              The user said via microphone: "{mic_input}" .
+#              Consider below available given database schema which is 
+#              : {db_schema}
+
+#  1. understand from user''s prompt if user want to create ? If yes then check what user want to create lead? log call, update lead status, lead conversion etc. 
+#  then make sure atleast - user has provided below fields (refering from given DB schema-
+#     for lead creation only -Contact name, Company.
+#     for log a call, or schedule a meeting or add a reminder task consider the DB schema given and ask relavant fields if missing
+#   2. when need to udpate check if proper fields are given according to given schema.
+#   3. when its creation of lead .. for lead_id field - use uuid
+#   by default insert/update this column - owner_id as value 'ghoshalt11'
+# """
+#              llm_response=session.sql(f"""
+#             SELECT snowflake.cortex.complete('llama3-8b', $$ {mic_prompt} $$)
+
+#             """).collect()[0][0]
+#              status.update(label="", state="complete", expanded=False)
+#         with st.chat_message("ai",avatar="❄️"):
+#                             st.write(f"{llm_response}")
+#                             st.session_state.chat_history.append({"role": "ai", "message": llm_response})
         
 
-        # ✅ Update session prompt with mic input
-        # st.session_state.prompt = mic_input
+#         # ✅ Update session prompt with mic input
+#         # st.session_state.prompt = mic_input
+             status.update(label="", state="complete", expanded=False)
+        with st.chat_message("ai", avatar="❄️"):
+             st.write(f"{cortex_response}")
+             st.session_state.chat_history.append({"role": "ai", "message": cortex_response})
 
     except sr.UnknownValueError:
-        st.error("❌ Could not understand audio.")
+        # st.error("❌ Could not understand audio.")
+        st.info("🎙️ Tip: Voice input not clear. Please speak clearly and ensure there's minimal background noise.")
     except sr.RequestError as e:
         st.error(f"❌ Could not request results; {e}")
     except Exception as e:
-        st.error(f"❌ Microphone error: {e}")
+        # st.error(f"❌ Microphone error: {e}")
+        st.info("🎙️ Tip: Possible microphone error..speak again")
+    except sr.WaitTimeoutError:
+        st.warning("⌛ You didn't say anything. Try again.")
+
 prompt = st.chat_input("Ask anything..")
 if prompt:
         
@@ -318,114 +388,167 @@ if prompt:
         safe_prompt = prompt.replace("'", "''") # to remove any single quote issue entered by user
         st.session_state.chat_history.append({"role": "user", "message": prompt})
 
-        recent_context = get_recent_context(st.session_state.chat_history, n=2)
+        recent_context = get_recent_context(st.session_state.chat_history, n=20)
         context_str = "\n".join([f"{entry['role']}: {entry['message']}" for entry in recent_context])
+
+        llm1_output_sql = session.sql(f"""
+SELECT SNOWFLAKE.CORTEX.COMPLETE(
+  'llama3-8b',
+  $$
+Act as a smart sales assistant cum strategist to user's. Dont be in passve tone.
+User will be input something, you need to samrtly figure out what user wish to do.
+If user want to create lead, before creating lead, take details of lead to identofy if its qualified lead or not.
+ If qualified then give suggestions to nurture them further.
+Suggest what business points, challengs clients/leads being user discussin we should look in for according to Services we are offering.
+
+whatever you responds, wrap it smartly and short, so user no need to read long paragraphs what you reply back
+Dont forget to check your memory  :"{context_str}" , which is recent last chat history so you understand context of user's input if its new request or continuation from past chat history.
+Here is our (Nihilent's) Companies's Offerings /service :
+
+
+                        1. Data engnieering 
+                        2. AI driven customized cloud native app solutions. 
+                        3. Data Analysis, Data Science and Business consulting support 
+                        4. Cloud Infra Support
+                       
+                                          
+Now User says: {safe_prompt}
+$$
+)
+""").collect()[0][0]
+#         llm2_result = session.sql(f"""
+# SELECT SNOWFLAKE.CORTEX.COMPLETE(
+#   'snowflake-arctic',
+#   $$
+#   You are a strict SQL validator.
+#   You are given a user prompt and a generated SQL insert statement.
+#   Check if all mandatory fields are extracted: FIRST_NAME, LAST_NAME, COMPANY.
+#   If all three are non-empty in the SQL, reply only: Yes
+#   If any of them are missing (empty string or blank), reply only: Ask mandatory fields
+
+#   User input: {safe_prompt}
+#   Generated SQL: {llm1_output_sql}
+#   $$
+# )
+# """).collect()[0][0].strip()
+        
+#         if llm2_result == "Yes":
+#              # SQL is valid → execute insert
+#              session.sql(llm1_output_sql).collect()
+#              cortex_response = f"✅ Lead created successfully!"
+#         else:
+#              # Missing fields → ask back
+#              cortex_response=f"{llm2_result} {llm2_result}"
+#     #          cortex_response = (
+#     #     "⚠️ need a few more details to create this lead {llm1_output_sql}.\n\n" 
+#     #     "**Please provide:** FIRST_NAME, LAST_NAME, and COMPANY."
+#     # )
+
 
         # prompt engineering the LLM model 'snowflake-arctic' to reply user's contextual questions.
         # chat_prompt=
-        model_response = session.sql(f"""
-            SELECT snowflake.cortex.complete(
-            'llama3-8b',$$
-            You act as **SalesSense**, an AI-powered CRM assistant bot for sales reps.  
-            Follow these rules strictly.
-            ### Past conversation with User''s CONTEXT
-            {context_str}
-            ### Current NEW INPUT
-            "{safe_prompt}"
-            ### RESPONSE RULES
-            1. Respond naturally, clearly, and briefly — don't repeat the user’s message.
-            2. Only greet if the input is a pure greeting ("hi", "hello").
-            3. If User's input is unclear or incomplete, politely ask for **specific missing info** only (not a generic explanation).
-            4. If User asks CRM-related data entry tasks/action (like update, insert, view), respond like:
+#         model_response = session.sql(f"""
+#             SELECT snowflake.cortex.complete(
+#             'llama3-8b',$$
+#             You act as **SalesSense**, an AI-powered CRM assistant bot for sales reps.  
+#             Follow these rules strictly.
+#             ### Past conversation with User''s CONTEXT
+#             {context_str}
+#             ### Current NEW INPUT
+#             "{safe_prompt}"
+#             ### RESPONSE RULES
+#             1. Respond naturally, clearly, and briefly — don't repeat the user’s message.
+#             2. Only greet if the input is a pure greeting ("hi", "hello").
+#             3. If User's input is unclear or incomplete, politely ask for **specific missing info** only (not a generic explanation).
+#             4. If User asks CRM-related data entry tasks/action (like update, insert, view), respond like:
              
-             - ✅ Ask only what’s missing (according to below mentioned schema context given) and do not End with `[ACTION: SQL_GENERATION_REQUIRED]` unless it is clear enough to geerate SQL
-             - ⛔ Don’t assume missing values or overexplain
-             - Only End with `[ACTION: SQL_GENERATION_REQUIRED]` if input is clear enough to generate a respective SQL statement.
+#              - ✅ Ask only what’s missing (according to below mentioned schema context given) and do not End with `[ACTION: SQL_GENERATION_REQUIRED]` unless it is clear enough to geerate SQL
+#              - ⛔ Don’t assume missing values or overexplain
+#              - Only End with `[ACTION: SQL_GENERATION_REQUIRED]` if input is clear enough to generate a respective SQL statement.
            
 
-            ### DATABASE SCHEMA
-            - leads(lead_id, name, region, score)
-            - deals(deal_id, lead_id, status, close_date)
-            Sample statuses: "Closed-Won", "Proposal", "Negotiation"
+#             Consider below available given database schema which is 
+#              : {db_schema}
 
-            Respond now:
-            $$)""").collect()
+#             Respond now:
+#             $$)""").collect()
 
-        model_response = model_response[0][0] # Bot model's responses captured in variable model_response
+#         model_response = model_response[0][0] # Bot model's responses captured in variable model_response
         
-        if '[ACTION: SQL_GENERATION_REQUIRED]' in model_response:
-            generate_sql=True
-        else:
-            generate_sql=False
+#         if '[ACTION: SQL_GENERATION_REQUIRED]' in model_response:
+#             generate_sql=True
+#         else:
+#             generate_sql=False
             
-        model_response=model_response.replace("[ACTION: SQL_GENERATION_REQUIRED]", "").strip()
+#         model_response=model_response.replace("[ACTION: SQL_GENERATION_REQUIRED]", "").strip()
         
-        cortex_response=model_response
-        # generate_sql=True
-        result_df=None
+#         cortex_response=model_response
+#         # generate_sql=True
+#         result_df=None
 
-        if generate_sql: # if need to generate SQL then
+#         if generate_sql: # if need to generate SQL then
 
-            # Prompting model to generate SQL and execute
-            sql_query_generated=session.sql(f"""
-            SELECT snowflake.cortex.complete(
-            'snowflake-arctic', 
-            $$Act as an Snowflake SQL expert, convert this User's natural input prompt into a SQL statement.
-            Note - When context is clear to you, then only give me the SQL statement to be executed as output.
+#             # Prompting model to generate SQL and execute
+#             sql_query_generated=session.sql(f"""
+#             SELECT snowflake.cortex.complete(
+#             'snowflake-arctic', 
+#             $$Act as an Snowflake SQL expert, convert this User's natural input prompt into a SQL statement.
+#             Note - When context is clear to you, then only give me the SQL statement to be executed as output.
 
-             User's natural input prompt:
-            "{safe_prompt}"
+#              User's natural input prompt:
+#             "{safe_prompt}"
             
-            CRM database schema context given below for for generating SQL :
+#             CRM database schema context given below for for generating SQL :
             
-            - leads(lead_id, name, region, score)
-            - deals(deal_id, lead_id, status, close_date)  
-            sample deal status data - 'Closed-Won', 'Closed-lost', 
-            'Proposal' etc., This is just an example  $$)""").collect()[0][0]
+#             - leads(lead_id, name, region, score)
+#             - deals(deal_id, lead_id, status, close_date)  
+#             sample deal status data - 'Closed-Won', 'Closed-lost', 
+#             'Proposal' etc., This is just an example  $$)""").collect()[0][0]
 
-            # st.session_state.chat_history.append({"role": "ai", "message": sql_query_generated})
+#             # st.session_state.chat_history.append({"role": "ai", "message": sql_query_generated})
 
-            result_df=session.sql(f""" SELECT     
-    concat(l.FIRST_NAME, ' ', 
-    l.LAST_NAME) Lead_contact_name, 
-    l.company,
-    l.country, l.phone,
-    d.OPPORTUNITY_NAME, 
-    d.AMOUNT, 
-    d.STAGE 
-FROM 
-    CRM_SAMPLE_DB.PUBLIC.LEADS l
-JOIN 
-    CRM_SAMPLE_DB.PUBLIC.DEALS d ON l.LEAD_ID = d.LEAD_ID
-WHERE 
-    l.STATUS = 'New' 
-    AND d.STAGE = 'Prospecting' 
-    AND d.PROBABILITY > 0.5 
-ORDER BY 
-    d.PROBABILITY DESC;""").to_pandas()
+#             result_df=session.sql(f""" SELECT     
+#     concat(l.FIRST_NAME, ' ', 
+#     l.LAST_NAME) Lead_contact_name, 
+#     l.company,
+#     l.country, l.phone,
+#     d.OPPORTUNITY_NAME, 
+#     d.AMOUNT, 
+#     d.STAGE 
+# FROM 
+#     CRM_SAMPLE_DB.PUBLIC.LEADS l
+# JOIN 
+#     CRM_SAMPLE_DB.PUBLIC.DEALS d ON l.LEAD_ID = d.LEAD_ID
+# WHERE 
+#     l.STATUS = 'New' 
+#     AND d.STAGE = 'Prospecting' 
+#     AND d.PROBABILITY > 0.5 
+# ORDER BY 
+#     d.PROBABILITY DESC;""").to_pandas()
             
-            cortex_response=cortex_response+' '+'sql generated:'+sql_query_generated
+#             cortex_response=cortex_response+' '+'sql generated:'+sql_query_generated
+
             
             
             
 
-
+    cortex_response=llm1_output_sql
     # Chatbot relpying back to user response
     with st.chat_message("ai",avatar="❄️"):
         
         st.write(f"{cortex_response}")
         # st.line_chart(np.random.randn(30,3))
-        if generate_sql:
-            st.dataframe(result_df, use_container_width=True)
-            st.markdown("""
-<style>
-    .element-container:has(.dataframe) {
-        border-radius: 12px;
-        overflow: hidden;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-    }
-</style>
-""", unsafe_allow_html=True)
+#         if generate_sql:
+#             st.dataframe(result_df, use_container_width=True)
+#             st.markdown("""
+# <style>
+#     .element-container:has(.dataframe) {
+#         border-radius: 12px;
+#         overflow: hidden;
+#         box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+#     }
+# </style>
+# """, unsafe_allow_html=True)
 
         st.session_state.chat_history.append({"role": "ai", "message": cortex_response})
 
