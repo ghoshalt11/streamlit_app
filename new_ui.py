@@ -37,7 +37,7 @@ session = get_or_create_session()
 
 # python UDF function for retrieving recent user-bot conversations to have past context linked to current user prompt
 def get_recent_context(chat_history, n):
-    return chat_history[-n:] if len(chat_history) >= n else chat_history
+    return chat_history[-n:] if len(chat_history) >= 1 else chat_history
 
 st.markdown("""
     <style>
@@ -91,8 +91,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
-
 
 
 st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
@@ -166,7 +164,7 @@ st.markdown("""
 
 uploaded_file = st.file_uploader(
     label="",  # hide label now that we styled it above
-    type=["pdf", "png", "jpg", "jpeg", "wav","xlsx", "xls"],
+    type=["pdf", "png", "jpg", "jpeg", "wav","xlsx", "xls","csv"],
     label_visibility="collapsed",
     accept_multiple_files=False
 )                
@@ -176,27 +174,32 @@ if uploaded_file:
 
     file_name = uploaded_file.name
     file_ext = file_name.split('.')[-1].lower()
-        
-    PutResult = session.file.put_stream(
+
+    if file_ext in ["pdf", "png", "jpg", "jpeg"]:
+         PutResult = session.file.put_stream(
     uploaded_file,
     f"@CRM_SCHEMA_STAGE/{uploaded_file.name}",
     auto_compress=False,
     overwrite=True
 )
-    
-    if PutResult and PutResult.status in ["UPLOADED", "OVERWRITTEN"]:
+    if file_ext in ["pdf", "png", "jpg", "jpeg"]:
+         if PutResult and PutResult.status in ["UPLOADED", "OVERWRITTEN"]:
+
+
         
         # st.info(f"✅ File uploaded : {PutResult.target}..parsing started..")
-        with st.status("🧠 AI Image Parsing ...", expanded=True) as status:
-             if file_ext in ["pdf", "png", "jpg", "jpeg"]:
-                  parsed = session.sql(f"""
+            with st.status("🧠 AI Image Parsing ...", expanded=True) as status:
+               
+             
+            #  if file_ext in ["pdf", "png", "jpg", "jpeg"]:
+               parsed = session.sql(f"""
                 SELECT SNOWFLAKE.CORTEX.PARSE_DOCUMENT('@CRM_SCHEMA_STAGE',
                     '{file_name}', 
                     PARSE_JSON('{{"mode": "OCR"}}')
                 )
             """).collect()
-                  extracted_text = parsed[0][0] if parsed else "No text extracted."
-                  extracted_text=session.sql(f"""SELECT SNOWFLAKE.CORTEX.COMPLETE(
+               extracted_text = parsed[0][0] if parsed else "No text extracted."
+               extracted_text=session.sql(f"""SELECT SNOWFLAKE.CORTEX.COMPLETE(
                                        
                     'snowflake-arctic',
                             $$
@@ -212,23 +215,24 @@ if uploaded_file:
                     $$
                 )""").collect()
                   
-                  extracted_text=extracted_text[0][0]
-                  status.update(label="✅ Analysis done!", state="complete", expanded=False)
-
-        st.text_area("📄 Extracted Text from Image uploaded", value=extracted_text, height=300)
+               extracted_text=extracted_text[0][0]
+               status.update(label="✅ Analysis done!", state="complete", expanded=False)
+            st.text_area("📄 Extracted Text from Image uploaded", value=extracted_text, height=400)
+        
     
-        if file_ext in ["xlsx", "xls"]: 
+    if file_ext in ["xlsx", "xls"]: 
+            
             # df = pd.read_excel(uploaded_file)
             excel_file = pd.ExcelFile(uploaded_file)
             sheet_names = excel_file.sheet_names
             selected_sheet = st.selectbox("Choose a sheet to load", sheet_names)
             df = excel_file.parse(selected_sheet)
             st.info("✅ Excel sheet loaded.")
-            st.dataframe(df.head(10))
+            st.dataframe(df.head(20))
             with st.status("🧠 AI Analyzing ...", expanded=True) as status:
                         csv_text = df.head(100).to_csv(index=False)
                         llm_prompt=prompt = f"""
-You are a sales analyst AI and chatting with a user currntly you are speaking. 
+You are a sales analyst AI and chatting with a user currently you are speaking. 
 
 Below is a dataset of leads in CSV format. Analyze it and provide in such a way that you speaking to the user directl and give insights analysis in below format:
 - What recommendation / suggestion you would like to give as a sales rep assistant.
@@ -248,8 +252,40 @@ Below is a dataset of leads in CSV format. Analyze it and provide in such a way 
             with st.chat_message("ai",avatar="❄️"):
                             
                             st.write(f"{exl_insight_response}")
+            
 
-    
+        # csv files
+    if file_ext in ["csv"]: 
+            # df = pd.read_excel(uploaded_file)
+            df = pd.read_csv(uploaded_file)
+            # sheet_names = excel_file.sheet_names
+            # selected_sheet = st.selectbox("Choose a sheet to load", sheet_names)
+            # df = excel_file.parse(selected_sheet)
+            st.info("✅ CSV loaded.")
+            st.dataframe(df.head(7))
+            with st.status("🧠 AI Analyzing ...", expanded=True) as status:
+                        csv_text = df.head(20).to_csv(index=False)
+                        llm_prompt=prompt = f"""
+Act as CRM sales analyst chatting with a user currently and not speaking in passive tone.
+Your tone should appear like you already analysed the data given here and ready to provide key insights. 
+
+Analyze the provided data below in such a way that you speaking to the user directly and give insights analysis in below format:
+- What recommendation / suggestion you would like to give as a sales rep assistant.
+- if business pain points of leads missing any suggest immediate actions accordingly
+
+### Data:
+{csv_text}
+
+### Insights:
+"""
+                        
+                        exl_insight_response = session.sql(f"""
+    SELECT snowflake.cortex.complete('llama3-8b', $$ {llm_prompt} $$)
+""").collect()[0][0]
+                        status.update(label="✅ CSV Analysis complete!", state="complete", expanded=False)
+            with st.chat_message("ai",avatar="❄️"):
+                            
+                            st.write(f"{exl_insight_response}")
 
 # logic to handle user enters chat
 # Microphone input
@@ -260,9 +296,11 @@ if st.button("🎙️Speak"):
         recent_context = get_recent_context(st.session_state.chat_history, n=20)
         context_str = "\n".join([f"{entry['role']}: {entry['message']}" for entry in recent_context])
         with sr.Microphone() as source:
-            st.info("🎤 Listening...speak now (~21 secs).")
+            
+            st.info("* Preparing the mic...get ready to speak in 6 seconds")
             recognizer.adjust_for_ambient_noise(source)
-            audio = recognizer.listen(source, timeout=6, phrase_time_limit=26)
+            st.info("🎤 here you go...speak now (~ max 21 secs).")
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=29)
             # audio = recognizer.listen(source)
             mic_input = recognizer.recognize_google(audio)
 
