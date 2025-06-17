@@ -1,24 +1,23 @@
 # Import python packages
 import streamlit as st
 
-import pandas as pd
+# import pandas as pd
+import json
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 import speech_recognition as sr
-import os as os
+import base64
 
 # from streamlit_audiorec import audio_recorder
 
-
-
 connection_parameters = {
-    "account": os.getenv("SNOWFLAKE_ACCOUNT"),
-    "user": os.getenv("SNOWFLAKE_USER"),
-    "password": os.getenv("SNOWFLAKE_PASSWORD"),
-    "role": os.getenv("SNOWFLAKE_ROLE"),
-    "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
-    "database": os.getenv("SNOWFLAKE_DATABASE"),
-    "schema": os.getenv("SNOWFLAKE_SCHEMA"),
+    "account": "LZAPLSF-WJB84947",
+    "user": "ghoshalt11",
+    "password": "Snowpals!@#123",
+    "role": "ACCOUNTADMIN",
+    "warehouse": "COMPUTE_WH",
+    "database": "CRM_SAMPLE_DB",
+    "schema": "PUBLIC"
 }
 # session = Session.builder.configs(connection_parameters).create()
 def get_or_create_session():
@@ -28,17 +27,10 @@ def get_or_create_session():
 
 session = get_or_create_session()
 
-# audio_queue = queue.Queue()
-
-# def audio_frame_callback(frame: av.AudioFrame) -> av.AudioFrame:
-#     audio = frame.to_ndarray().flatten().astype(np.int16).tobytes()
-#     audio_queue.put(audio)
-#     return frame
-
 
 # python UDF function for retrieving recent user-bot conversations to have past context linked to current user prompt
 def get_recent_context(chat_history, n):
-    return chat_history[-n:] if len(chat_history) >= n else chat_history
+    return chat_history[-n:] if len(chat_history) >= 1 else chat_history
 
 st.markdown("""
     <style>
@@ -74,25 +66,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# Read and encode the local image
+with open("4d8c8433-162c-4055-b4f1-91d10d5e0c5c.png", "rb") as image_file:
+    encoded = base64.b64encode(image_file.read()).decode()
 
 st.markdown(
-    """
-    <h2 style="
-        background-image: linear-gradient(90deg, #007ace, #29B5E8, #5AC8FA);
-        background-clip: text;
-        -webkit-background-clip: text;
-        color: transparent;
-        -webkit-text-fill-color: transparent;
-        font-weight: 700;
-        text-align: center;
-        margin-top: 10px;
-    ">
-    ❄️ How May I Assist You?
-    </h2>
+    f"""
+    <div style="display: flex; align-items: center; justify-content: center; margin-top: 20px;">
+        <img src="data:image/png;base64,{encoded}" alt="Logo" width="60" style="margin-right: 15px;"/>
+        <h2 style="
+            background-image: linear-gradient(90deg, #007ace, #29B5E8, #5AC8FA);
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            -webkit-text-fill-color: transparent;
+            font-weight: 700;
+            margin: 0;
+        ">
+        How May I Assist You?
+        </h2>
+    </div>
     """,
     unsafe_allow_html=True
 )
-
 
 
 
@@ -117,7 +113,7 @@ st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
 db_schema=session.sql(f"""SELECT LISTAGG($1, '\n') FROM @CRM_SAMPLE_DB.PUBLIC.CRM_SCHEMA_STAGE/crm_schema_ss.sql
       (FILE_FORMAT => 'crm_sql_format')""")
 with st.sidebar:    
-    if st.button("🗑 clear chat", help="Clear chat session history"):
+    if st.button("🗑 clear chat"):
         st.session_state.chat_history = []
     if st.button("💾 save chat"):
         chat_lines = []
@@ -159,45 +155,71 @@ uploaded_file=None
             
 #             if st.session_state.show_upload:
                 
+# st.markdown(
+#     """
+#     <div style="
+#         border: 2px dashed #1f77b4;
+#         padding: 40px;
+#         border-radius: 10px;
+#         text-align: center;
+#         background-color: #f9f9f9;
+#         color: #444;
+#         font-weight: 600;
+#         font-size: 16px;
+#         margin-bottom: 20px;
+#     ">
+#         📂 Drag & drop your file here, or click to browse
+#     </div>
+#     """,
+#     unsafe_allow_html=True
+# )
+
+
+# Custom CSS to shrink the uploader
 st.markdown("""
 <div style='font-weight:600; font-size:16px; margin-bottom:4px; margin-top:10px;'>
 📎 Upload File (e.g., Notes, Contact Cards, PDFs)
 </div>
 """, unsafe_allow_html=True)
-
+# Actual uploader
 uploaded_file = st.file_uploader(
-    label="",  # hide label now that we styled it above
-    type=["pdf", "png", "jpg", "jpeg", "wav","xlsx", "xls"],
+    label="Upload Your File",
+    type=["pdf", "png", "jpg", "jpeg", "wav", "xlsx", "xls", "csv"],
     label_visibility="collapsed",
     accept_multiple_files=False
-)                
+)
 
                     
 if uploaded_file:
 
     file_name = uploaded_file.name
     file_ext = file_name.split('.')[-1].lower()
-        
-    PutResult = session.file.put_stream(
+
+    if file_ext in ["pdf", "png", "jpg", "jpeg"]:
+         PutResult = session.file.put_stream(
     uploaded_file,
     f"@CRM_SCHEMA_STAGE/{uploaded_file.name}",
     auto_compress=False,
     overwrite=True
 )
-    
-    if PutResult and PutResult.status in ["UPLOADED", "OVERWRITTEN"]:
+    if file_ext in ["pdf", "png", "jpg", "jpeg"]:
+         if PutResult and PutResult.status in ["UPLOADED", "OVERWRITTEN"]:
+
+
         
         # st.info(f"✅ File uploaded : {PutResult.target}..parsing started..")
-        with st.status("🧠 AI Image Parsing ...", expanded=True) as status:
-             if file_ext in ["pdf", "png", "jpg", "jpeg"]:
-                  parsed = session.sql(f"""
+            with st.status("🧠 AI Image Parsing ...", expanded=True) as status:
+               
+             
+            #  if file_ext in ["pdf", "png", "jpg", "jpeg"]:
+               parsed = session.sql(f"""
                 SELECT SNOWFLAKE.CORTEX.PARSE_DOCUMENT('@CRM_SCHEMA_STAGE',
                     '{file_name}', 
                     PARSE_JSON('{{"mode": "OCR"}}')
                 )
             """).collect()
-                  extracted_text = parsed[0][0] if parsed else "No text extracted."
-                  extracted_text=session.sql(f"""SELECT SNOWFLAKE.CORTEX.COMPLETE(
+               extracted_text = parsed[0][0] if parsed else "No text extracted."
+               extracted_text=session.sql(f"""SELECT SNOWFLAKE.CORTEX.COMPLETE(
                                        
                     'snowflake-arctic',
                             $$
@@ -213,23 +235,24 @@ if uploaded_file:
                     $$
                 )""").collect()
                   
-                  extracted_text=extracted_text[0][0]
-                  status.update(label="✅ Analysis done!", state="complete", expanded=False)
-
-        st.text_area("📄 Extracted Text from Image uploaded", value=extracted_text, height=300)
+               extracted_text=extracted_text[0][0]
+               status.update(label="✅ Analysis done!", state="complete", expanded=False)
+            st.text_area("📄 Extracted Text from Image uploaded", value=extracted_text, height=400)
+        
     
-        if file_ext in ["xlsx", "xls"]: 
+    if file_ext in ["xlsx", "xls"]: 
+            
             # df = pd.read_excel(uploaded_file)
             excel_file = pd.ExcelFile(uploaded_file)
             sheet_names = excel_file.sheet_names
             selected_sheet = st.selectbox("Choose a sheet to load", sheet_names)
             df = excel_file.parse(selected_sheet)
             st.info("✅ Excel sheet loaded.")
-            st.dataframe(df.head(10))
+            st.dataframe(df.head(20))
             with st.status("🧠 AI Analyzing ...", expanded=True) as status:
                         csv_text = df.head(100).to_csv(index=False)
                         llm_prompt=prompt = f"""
-You are a sales analyst AI and chatting with a user currntly you are speaking. 
+You are a sales analyst AI and chatting with a user currently you are speaking. 
 
 Below is a dataset of leads in CSV format. Analyze it and provide in such a way that you speaking to the user directl and give insights analysis in below format:
 - What recommendation / suggestion you would like to give as a sales rep assistant.
@@ -249,139 +272,248 @@ Below is a dataset of leads in CSV format. Analyze it and provide in such a way 
             with st.chat_message("ai",avatar="❄️"):
                             
                             st.write(f"{exl_insight_response}")
+            
 
-    
+        # csv files
+    if file_ext in ["csv"]: 
+            # df = pd.read_excel(uploaded_file)
+            df = pd.read_csv(uploaded_file)
+            # sheet_names = excel_file.sheet_names
+            # selected_sheet = st.selectbox("Choose a sheet to load", sheet_names)
+            # df = excel_file.parse(selected_sheet)
+            st.info("✅ CSV loaded.")
+            st.dataframe(df.head(7))
+            with st.status("🧠 AI Analyzing ...", expanded=True) as status:
+                        csv_text = df.head(20).to_csv(index=False)
+                        llm_prompt=prompt = f"""
+Act as CRM sales analyst chatting with a user currently and not speaking in passive tone.
+Your tone should appear like you already analysed the data given here and ready to provide key insights. 
+
+Analyze the provided data below in such a way that you speaking to the user directly and give insights analysis in below format:
+- What recommendation / suggestion you would like to give as a sales rep assistant.
+- if business pain points of leads missing any suggest immediate actions accordingly
+
+### Data:
+{csv_text}
+
+### Insights:
+"""
+                        
+                        exl_insight_response = session.sql(f"""
+    SELECT snowflake.cortex.complete('llama3-8b', $$ {llm_prompt} $$)
+""").collect()[0][0]
+                        status.update(label="✅ CSV Analysis complete!", state="complete", expanded=False)
+            with st.chat_message("ai",avatar="❄️"):
+                            
+                            st.write(f"{exl_insight_response}")
 
 # logic to handle user enters chat
 # Microphone input
+mic_input=None
+exception_occurred=False
 if st.button("🎙️Speak"):
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     try:
-        recent_context = get_recent_context(st.session_state.chat_history, n=20)
+        recent_context = get_recent_context(st.session_state.chat_history, n=25)
         context_str = "\n".join([f"{entry['role']}: {entry['message']}" for entry in recent_context])
         with sr.Microphone() as source:
-            st.info("🎤 Listening...speak now (~21 secs).")
+            
+            st.info("preparing mic...get ready in 6 seconds")
             recognizer.adjust_for_ambient_noise(source)
-            audio = recognizer.listen(source, timeout=6, phrase_time_limit=26)
+            st.info("🎤 listening...speak now (~ max 21 secs).")
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=27)
             # audio = recognizer.listen(source)
             mic_input = recognizer.recognize_google(audio)
 
-        st.info(f"🗣️ You said: {mic_input}")
+    
+
+            st.info(f"🗣️ You said: {mic_input}")
         # mic_input='speaking mic: '+mic_input
-        st.session_state.chat_history.append({"role": "user", "message": mic_input})
-        with st.status("🧠 AI analyzing ...", expanded=True) as status:
-             
-            #  safe_prompt = mic_input.replace("'", "''")
+            st.session_state.chat_history.append({"role": "user", "message": mic_input})
+            
             #  safe_prompt = mic_input llama3-70b llama3-8b
-             llm1_output_sql = session.sql(f"""
-SELECT SNOWFLAKE.CORTEX.COMPLETE(
-  'llama3-8b',
-  $$
-Act as a smart sales assistant cum strategist to user's. Dont be in passve tone.
-User will be input something, you need to samrtly figure out what user wish to do.
-If user want to create lead, before creating lead, take details of lead to identofy if its qualified lead or not.
- If qualified then give suggestions to nurture them further.
-Suggest what business points, challengs clients/leads being user discussin we should look in for according to Services we are offering.
 
-whatever you responds, wrap it smartly and short, so user no need to read long paragraphs what you reply back
-Dont forget to check your memory  :"{context_str}" , which is recent last chat history so you understand context of user's input if its new request or continuation from past chat history.
-Here is our (Nihilent's) Companies's Offerings /service :
-
-
-                        1. Data engnieering, Analysis & Business analysis as consulting.
-                        2. AI driven customized cloud native app solutions. 
-                        3. Small size tech startup support. 
-                        4. Cloud Infra Support
-                       
-                                          
-Now User says: {mic_input}
-$$
-)
-""").collect()[0][0]
-             cortex_response=llm1_output_sql
-#              llm2_result = session.sql(f"""
-# SELECT SNOWFLAKE.CORTEX.COMPLETE(
-#   'snowflake-arctic',
-#   $$
-#   You are a strict SQL validator.
-#   You are given a user prompt and a generated SQL insert statement.
-#   Check if all mandatory fields are extracted: FIRST_NAME, LAST_NAME, COMPANY.
-#   If all three are non-empty in the SQL, reply only: Yes
-#   If any of them are missing (empty string or blank), reply only: Ask mandatory fields
-
-#   User input: {mic_input}
-#   Generated SQL: {llm1_output_sql}
-#   $$
-# )
-# """).collect()[0][0].strip()
-#              if "Yes" in llm2_result:
-#                   session.sql(llm1_output_sql).collect()
-#                   cortex_response = f"✅ Lead created successfully!"
-#              else:
-#                   cortex_response=f"{llm1_output_sql}"
-#     #               cortex_response = (
-#     #     "⚠️ I need  few more details to create this lead.\n\n"
-#     #     "**Please provide:** FIRST_NAME, LAST_NAME, and COMPANY."
-#     # )
-             
-                          
-#              mic_prompt = f"""
-#              You Act as an AI assistant for sales CRM workflow tasks automation and 
-#              currently act as you directly speaking to user. No need to give any prompt context you are being given here.
-
-#              Your job is first understand  User's need and also check with recent past chats with same user if it is anyhow related then act accordingly
-#              here is context of past recent chats with you : "{context_str}"
-
-#              Undertstand , Analyse properly then decide which category user's need falling into :
-#              1. lead status update / creation ?
-#              2. Log a call or schedule setup with lead/clients, or schedule a meeting or add a reminder task
-#              If Any lead/deals data asked to create update delete request made then consider given below DB schema, 
-#              according to that you will generate SQL statament and signal SQL to be generated.
-#              Respond in direct mode (tone of conversation), not as passive mode.
-
-           
-#              The user said via microphone: "{mic_input}" .
-#              Consider below available given database schema which is 
-#              : {db_schema}
-
-#  1. understand from user''s prompt if user want to create ? If yes then check what user want to create lead? log call, update lead status, lead conversion etc. 
-#  then make sure atleast - user has provided below fields (refering from given DB schema-
-#     for lead creation only -Contact name, Company.
-#     for log a call, or schedule a meeting or add a reminder task consider the DB schema given and ask relavant fields if missing
-#   2. when need to udpate check if proper fields are given according to given schema.
-#   3. when its creation of lead .. for lead_id field - use uuid
-#   by default insert/update this column - owner_id as value 'ghoshalt11'
-# """
-#              llm_response=session.sql(f"""
-#             SELECT snowflake.cortex.complete('llama3-8b', $$ {mic_prompt} $$)
-
-#             """).collect()[0][0]
-#              status.update(label="", state="complete", expanded=False)
-#         with st.chat_message("ai",avatar="❄️"):
-#                             st.write(f"{llm_response}")
-#                             st.session_state.chat_history.append({"role": "ai", "message": llm_response})
-        
-
-#         # ✅ Update session prompt with mic input
-#         # st.session_state.prompt = mic_input
-             status.update(label="", state="complete", expanded=False)
-        with st.chat_message("ai", avatar="❄️"):
-             st.write(f"{cortex_response}")
-             st.session_state.chat_history.append({"role": "ai", "message": cortex_response})
 
     except sr.UnknownValueError:
+        exception_occurred = True
         # st.error("❌ Could not understand audio.")
-        st.info("🎙️ Tip: Voice input not clear. Please speak clearly and ensure there's minimal background noise.")
+        st.info("🎙️ Tip: Voice input not clear. Please speak clearly and ensure minimal background noise.")
     except sr.RequestError as e:
+        exception_occurred = True
         st.error(f"❌ Could not request results; {e}")
     except Exception as e:
+        exception_occurred = True
         # st.error(f"❌ Microphone error: {e}")
         st.info("🎙️ Tip: Possible microphone error..speak again")
     except sr.WaitTimeoutError:
+        exception_occurred = True
         st.warning("⌛ You didn't say anything. Try again.")
 
-prompt = st.chat_input("Ask anything..")
+    llm1_output_sql=None
+    json_created=None
+    lead_created=None
+    if exception_occurred==False:
+          
+         
+         #with st.status("🧠 Cortex analyzing ...", expanded=True) as status:
+          
+          
+          json_created = session.sql(f"""
+SELECT TRY_PARSE_JSON(
+    SNOWFLAKE.CORTEX.COMPLETE(
+        'llama3-8b',
+        $$
+You are a CRM assistant.
+
+Your job is to extract from user input and return the following keys **strictly as a JSON object**:
+- FIRST_NAME
+- LAST_NAME
+- COMPANY
+- LEAD_SOURCE
+- STATUS
+- BUSINESS_PAIN_POINTS
+
+Rules:
+- If the contact name/person of the lead is like "Mr X" or "Ms X" or "Mrs X", ignore the title ("Mr") and set "X" as FIRST_NAME.
+- If any field is missing in the input, still include the key but with an empty string ("").
+- If LEAD_SOURCE is not mentioned, set it to "Manual Entry".
+- Do **not** include explanations or extra text.
+- Return **only** the JSON, nothing else.
+- Do **not** wrap the JSON in triple backticks or markdown formatting.
+
+Example:
+{{ 
+  "FIRST_NAME": "Jason", 
+  "LAST_NAME": "Kaur", 
+  "COMPANY": "XYZ Corporation", 
+  "LEAD_SOURCE": "Manual Entry", 
+  "STATUS": "",
+  "BUSINESS_PAIN_POINTS": "Data silos and low reporting accuracy, problem in migration, need scaling solutions etc."
+}}
+
+Now parse this input and return JSON:
+"{mic_input}"
+        $$
+    )
+) AS json_data
+""").collect()[0][0]
+        #   print('json_created',json_created)
+          msg_prompt=None
+          rating = ""
+          pain_points=""
+          if json_created==None:
+               msg_prompt=f"Your query or context regarding any lead creation not clear!. Try Again."
+               
+               
+          else: 
+               
+               json_created = json.loads(json_created)
+               if "partial_lead" not in st.session_state:
+                     st.session_state.partial_lead = {}
+
+               for field in ["FIRST_NAME", "LAST_NAME", "COMPANY", "LEAD_SOURCE", "STATUS", "BUSINESS_PAIN_POINTS"]:
+                     value = json_created.get(field, "")
+                     if value:  # Only update non-empty values
+                           st.session_state.partial_lead[field] = value
+               required_fields = ["FIRST_NAME", "COMPANY"]
+               missing = [f for f in required_fields if not st.session_state.partial_lead.get(f)]
+               if missing:
+                     msg_prompt = f"🛑 Still need: {', '.join(missing)} to create a lead. Please provide."
+               else:
+                    lead = st.session_state.partial_lead
+                    pain_points = lead.get("BUSINESS_PAIN_POINTS", "").strip().lower()
+
+                    user_said_later = any(
+                        phrase in mic_input.lower()
+                        for phrase in ["not known","pain points not known","will update later","no pain", "none for now", "later", "not now", "update later","nothing for now"]
+                    )
+
+                    if pain_points == None or pain_points=="": #and not user_said_later:
+                        msg_prompt = f"❓ You haven't mentioned any business pain points. "
+                        #     "Would you like to add them now, or say 'I'll update later' to continue?"
+                        # )
+                    else:
+                        # Optional: rate lead based on pain points
+                        # rating = "Cold"
+                        if pain_points:
+                            rating = session.sql(f"""
+                                SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                                    'llama3-8b',
+                                    $$ Classify lead as Hot/Warm/Cold based on these pain points:
+                                    {pain_points}
+                                    $$
+                                )
+                            """).collect()[0][0].strip()
+                    rating_clean = rating.replace("'", "''")
+                    llm1_output_sql = session.sql(f"""
+INSERT INTO LEADS (
+    LEAD_ID, FIRST_NAME, LAST_NAME, COMPANY, LEAD_SOURCE, STATUS, OWNER_ID, CREATED_DATE,BUSINESS_PAIN_POINTS,RATING
+)
+SELECT
+    UUID_STRING(),
+    '{lead.get("FIRST_NAME", "")}',
+    '{lead.get("LAST_NAME", "")}',
+    '{lead.get("COMPANY", "")}',
+    COALESCE(NULLIF('{lead.get("LEAD_SOURCE", "")}', ''), 'Manual Entry'),
+    '{lead.get("STATUS", "")}',
+    'ghoshalt11',
+    CURRENT_TIMESTAMP(),    
+    '{lead.get("BUSINESS_PAIN_POINTS", "").replace("'", "''")}',
+    '{rating_clean}'
+    
+""").collect()
+                    lead_created = True
+                    # st.session_state.partial_lead = {}  # ✅ clear once inserted
+                    msg_prompt=f"Lead created with lead qualification {rating_clean}!"
+
+
+
+          if msg_prompt:
+               cortex_response=msg_prompt
+        #   else:
+               
+               
+               
+        #        cortex_response="Lead Created!" #llm1_output_sql
+          with st.chat_message("ai", avatar="❄️"):
+            
+            #  cortex_response="Lead Created!"
+             st.write(cortex_response)
+             st.session_state.chat_history.append({"role": "ai", "message": cortex_response})
+            #  st.session_state.chat_history.append({"role":"ai","message":st.session_state.partial_lead})
+            #  st.session_state.chat_history.append({"role":"ai","message":json_created})
+            #  st.session_state.chat_history.append({"role":"ai","message":pain_points})
+             
+             if lead_created:
+                    
+                  
+            #       st.session_state.chat_history.append({"role": "ai", "message": json_created["COMPANY"]})
+                    recent_lead_df = session.sql("""
+    SELECT * 
+    FROM LEADS 
+    WHERE CREATED_DATE IS NOT NULL 
+    ORDER BY CREATED_DATE DESC 
+    LIMIT 1
+""").to_pandas()
+                    
+                    
+                    
+                  
+                  
+             
+
+# Display it to the user in Streamlit
+                    st.info("✅ Please Verify the Lead Just Created. Want to update any field ?")
+                    post_lead_creation_msg="✅ Please Verify the Lead Just Created. Want to update any field ?"
+                    st.dataframe(recent_lead_df)             
+                    st.session_state.chat_history.append({"role": "ai", "message": post_lead_creation_msg})
+                    st.session_state.partial_lead = {}
+
+     
+    
+
+prompt = st.chat_input("Ask anything...")
 if prompt:
         
     with st.chat_message("user"):
@@ -554,7 +686,6 @@ $$
         st.session_state.chat_history.append({"role": "ai", "message": cortex_response})
 
      
-
 
 
 
