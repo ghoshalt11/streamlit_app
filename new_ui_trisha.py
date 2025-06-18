@@ -19,6 +19,33 @@ connection_parameters = {
     "schema": "PUBLIC"
 }
 # session = Session.builder.configs(connection_parameters).create()
+def show_sales_conversion_chart(session):
+    chart_data = session.sql("""
+        SELECT 
+            TO_CHAR(DATE_TRUNC('MONTH', CLOSE_DATE), 'Mon') AS MONTH_LABEL,
+            EXTRACT(MONTH FROM CLOSE_DATE) AS MONTH_NO,
+            COUNT(*) AS DEALS_CLOSED,
+            SUM(AMOUNT) AS REVENUE
+        FROM DEALS
+        WHERE LOWER(STAGE) ILIKE '%won%'
+        AND CLOSE_DATE >= DATE_TRUNC('QUARTER', DATEADD(QUARTER, -1, CURRENT_DATE()))
+        AND OWNER_ID = 'ghoshalt11'
+        GROUP BY MONTH_LABEL, MONTH_NO
+        ORDER BY MONTH_NO
+    """)
+
+    if chart_data.count() == 0:
+        st.warning("No closed-won deals found in last quarter.")
+        return
+
+    # Convert to pandas and set MONTH_LABEL as index with proper order
+    df = chart_data.to_pandas()
+    df = df.sort_values("MONTH_NO")
+    df.set_index("MONTH_LABEL", inplace=True)
+
+    st.subheader("📊 Deals & Revenue (Last Quarter)")
+    st.bar_chart(df[["DEALS_CLOSED"]])
+    st.line_chart(df[["REVENUE"]])
 #Task / reminder
 def create_reminder_task(user_input, session):
     # st.subheader("\ud83d\udd14 Creating Reminder Task")
@@ -268,6 +295,7 @@ def fetch_upcoming_reminders(session):
         ORDER BY REMINDER_DATETIME ASC
         LIMIT 5
     """).to_pandas()
+    # reminders["REMINDER_MESSAGE"] = reminders["RAW_MESSAGE"].str.replace("\\n", " ", regex=False).str.replace('"', '')
 
     if reminders.empty:
         st.info("✅ No upcoming reminders.")
@@ -484,7 +512,7 @@ Advise the sales rep on what to do next:
 - Can our offerings solve this?
 - Is there any blocker or risk?
 
-Output in 3-4 bullet points.
+Output in 1-2 bullet points.
 """
      strategy_df = session.sql(f"""
             SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3-8b', $$ {strategy_prompt} $$) AS advice
@@ -555,7 +583,7 @@ Input: "{mic_input}"$$
         company =company.replace("'", "''")
         updates = parsed_json.get("FIELDS_TO_UPDATE", {})
         deal_value = parsed_json.get("DEAL_VALUE")  # optional field
-        st.code(parsed_json)
+        # st.code(parsed_json)
 
         if not company or not updates:
             st.warning("⚠️ Missing company or update fields.")
@@ -635,7 +663,7 @@ Input: "{mic_input}"$$
                     DEAL_ID, LEAD_ID, OPPORTUNITY_NAME, AMOUNT, STAGE, PROBABILITY, TYPE,
                     CLOSE_DATE, FORECAST_CATEGORY, OWNER_ID, CREATED_DATE
                 )
-                SELECT UUID_STRING(), '{lead_id}', 'Opportunity - {company}', {deal_amount}, 'Qualification', 0.4,
+                SELECT UUID_STRING(), '{lead_id}', 'Opportunity - {company}', {deal_amount}, 'Closed-Won', 0.4,
                        'New Business', '{close_date}', 'Pipeline', 'ghoshalt11', CURRENT_TIMESTAMP()
             """
             session.sql(insert_deal_sql).collect()
@@ -1179,7 +1207,7 @@ Return only the matching label from the above list. Do not explain.$$
     elif 'sales strategy' in user_intent or 'strategy' in user_intent:
          get_sales_deck(safe_prompt, session)
     elif 'sales_insights' in user_intent or 'insights' in user_intent:
-         show_last_quarter_insights(session)
+         show_sales_conversion_chart(session)
     elif 'lead create' in user_intent:
          lead_creation(safe_prompt, session)
     elif 'recommendation' in user_intent:
